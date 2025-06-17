@@ -7,110 +7,56 @@
 #include <iostream>
 #include <fstream>
 #include <type_traits>
-#include <immintrin.h> 
+#include <immintrin.h>
+#include <random>
+#include <functional>
 
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
 template <typename T>
-class AlignedAllocator {
-public:
-    using value_type = T;
-    
-    AlignedAllocator(size_t alignment = 64) : alignment_(alignment) {
-        if (alignment_ < alignof(void*)) {
-            alignment_ = alignof(void*);
-        }
-    }
-    
-    template <typename U>
-    AlignedAllocator(const AlignedAllocator<U>& other) noexcept 
-        : alignment_(other.alignment) {}
-    
-    T* allocate(size_t n) {
-        if (n > std::numeric_limits<size_t>::max() / sizeof(T)) {
-            throw std::bad_alloc();
-        }
-        void* ptr = aligned_alloc(alignment_, n * sizeof(T));
-        if (!ptr) throw std::bad_alloc();
-        return static_cast<T*>(ptr);
-    }
-    
-    void deallocate(T* ptr, size_t) noexcept {
-        std::free(ptr);
-    }
-    
-    size_t alignment_;
-};
-
-template <typename T, size_t Alignment = 64>
 class Matrix {
 public:
-    using value_type = T;
-    using allocator_type = AlignedAllocator<T>;
+    Matrix() : rows(0), cols(0) {}
     
-    Matrix() : rows_(0), cols_(0) {}
+    Matrix(size_t rows, size_t cols) : rows(rows), cols(cols), data(rows * cols) {}
     
-    Matrix(size_t rows, size_t cols) 
-        : rows_(rows), cols_(cols), 
-          data_(allocator_type().allocate(rows * cols), rows_ * cols) {}
-    
-    Matrix(size_t rows, size_t cols, const T& value)
-        : Matrix(rows, cols) {
-        std::fill_n(data_.get(), size(), value);
-    }
-    
-    // Rule of five
-    Matrix(const Matrix& other) : Matrix(other.rows_, other.cols_) {
-        std::copy(other.data_.get(), other.data_.get() + size(), data_.get());
-    }
-    
-    Matrix(Matrix&& other) noexcept 
-        : rows_(other.rows_), cols_(other.cols_), data_(std::move(other.data_)) {
-        other.rows_ = 0;
-        other.cols_ = 0;
-    }
-    
-    Matrix& operator=(const Matrix& other) {
-        if (this != &other) {
-            Matrix temp(other);
-            swap(temp);
-        }
-        return *this;
-    }
-    
-    Matrix& operator=(Matrix&& other) noexcept {
-        swap(other);
-        return *this;
-    }
-    
-    void swap(Matrix& other) noexcept {
-        std::swap(rows_, other.rows_);
-        std::swap(cols_, other.cols_);
-        std::swap(data_, other.data_);
-    }
+    Matrix(size_t rows, size_t cols, const T& init) : rows(rows), cols(cols), data(rows * cols, init) {}
     
     // Accessors
-    T& operator()(size_t i, size_t j) noexcept { 
-        return data_[i * cols_ + j]; 
-    }
-    
-    const T& operator()(size_t i, size_t j) const noexcept { 
-        return data_[i * cols_ + j]; 
-    }
+    T& operator()(size_t i, size_t j) { return data[i * cols + j]; }
+    const T& operator()(size_t i, size_t j) const { return data[i * cols + j]; }
     
     // Dimensions
-    size_t rows() const noexcept { return rows_; }
-    size_t cols() const noexcept { return cols_; }
-    size_t size() const noexcept { return rows_ * cols_; }
+    size_t num_rows() const noexcept { return rows; }
+    size_t num_cols() const noexcept { return cols; }
+    size_t size() const noexcept { return rows * cols; }
+    
+    // Row operations
+    void set_row(size_t i, const std::vector<T>& row) {
+        if (row.size() != cols) {
+            throw std::invalid_argument("Row size mismatch");
+        }
+        for (size_t j = 0; j < cols; j++) {
+            (*this)(i, j) = row[j];
+        }
+    }
+    
+    std::vector<T> row(size_t i) const {
+        if (i >= rows) throw std::out_of_range("Row index out of range");
+        std::vector<T> result(cols);
+        for (size_t j = 0; j < cols; j++) {
+            result[j] = (*this)(i, j);
+        }
+        return result;
+    }
     
     // Matrix operations
     Matrix transpose() const {
-        Matrix result(cols_, rows_);
-        #pragma omp parallel for
-        for (size_t i = 0; i < rows_; ++i) {
-            for (size_t j = 0; j < cols_; ++j) {
+        Matrix result(cols, rows);
+        for (size_t i = 0; i < rows; i++) {
+            for (size_t j = 0; j < cols; j++) {
                 result(j, i) = (*this)(i, j);
             }
         }
@@ -118,26 +64,61 @@ public:
     }
     
     Matrix operator*(const Matrix& other) const {
-        if (cols_ != other.rows_) {
+        if (cols != other.rows) {
             throw std::invalid_argument("Matrix dimensions mismatch");
         }
         
-        Matrix result(rows_, other.cols_);
+        Matrix result(rows, other.cols);
         
-        if constexpr (std::is_same_v<T, float> && USE_AVX) {
-            avx_matrix_multiply(other, result);
-        } else {
-            #pragma omp parallel for
-            for (size_t i = 0; i < rows_; ++i) {
-                for (size_t k = 0; k < cols_; ++k) {
-                    T a = (*this)(i, k);
-                    for (size_t j = 0; j < other.cols_; ++j) {
-                        result(i, j) += a * other(k, j);
-                    }
+        #ifdef _OPENMP
+        #pragma omp parallel for
+        #endif
+        for (size_t i = 0; i < rows; i++) {
+            for (size_t k = 0; k < cols; k++) {
+                T a = (*this)(i, k);
+                for (size_t j = 0; j < other.cols; j++) {
+                    result(i, j) += a * other(k, j);
                 }
             }
         }
         return result;
+    }
+    
+    Matrix operator*(T scalar) const {
+        Matrix result(rows, cols);
+        for (size_t i = 0; i < rows * cols; i++) {
+            result.data[i] = data[i] * scalar;
+        }
+        return result;
+    }
+    
+    friend Matrix operator*(T scalar, const Matrix& mat) {
+        return mat * scalar;
+    }
+    
+    Matrix operator-(const Matrix& other) const {
+        if (rows != other.rows || cols != other.cols) {
+            throw std::invalid_argument("Matrix dimensions mismatch");
+        }
+        
+        Matrix result(rows, cols);
+        for (size_t i = 0; i < rows * cols; i++) {
+            result.data[i] = data[i] - other.data[i];
+        }
+        return result;
+    }
+    
+    // Vector operations
+    T norm() const {
+        if (rows != 1 && cols != 1) {
+            throw std::runtime_error("Norm only defined for vectors");
+        }
+        
+        T sum = 0;
+        for (const auto& val : data) {
+            sum += val * val;
+        }
+        return std::sqrt(sum);
     }
     
     // Serialization
@@ -145,54 +126,30 @@ public:
         std::ofstream file(filename, std::ios::binary);
         if (!file) throw std::runtime_error("Cannot open file: " + filename);
         
-        file.write(reinterpret_cast<const char*>(&rows_), sizeof(rows_));
-        file.write(reinterpret_cast<const char*>(&cols_), sizeof(cols_));
-        file.write(reinterpret_cast<const char*>(data_.get()), size() * sizeof(T));
+        file.write(reinterpret_cast<const char*>(&rows), sizeof(rows));
+        file.write(reinterpret_cast<const char*>(&cols), sizeof(cols));
+        file.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(T));
     }
     
-    static Matrix load(const std::string& filename) {
+    void load(const std::string& filename) {
         std::ifstream file(filename, std::ios::binary);
         if (!file) throw std::runtime_error("Cannot open file: " + filename);
         
-        size_t rows, cols;
         file.read(reinterpret_cast<char*>(&rows), sizeof(rows));
         file.read(reinterpret_cast<char*>(&cols), sizeof(cols));
-        
-        Matrix result(rows, cols);
-        file.read(reinterpret_cast<char*>(result.data_.get()), result.size() * sizeof(T));
-        return result;
+        data.resize(rows * cols);
+        file.read(reinterpret_cast<char*>(data.data()), data.size() * sizeof(T));
     }
     
+    // Data access
+    const std::vector<T>& get_data() const { return data; }
+    std::vector<T>& get_data() { return data; }
+
 private:
-    size_t rows_, cols_;
-    std::unique_ptr<T[], allocator_type> data_;
-    
-    // AVX-optimized matrix multiplication (float only)
-    void avx_matrix_multiply(const Matrix& other, Matrix& result) const {
-        static_assert(std::is_same_v<T, float>, "AVX only for float");
-        
-        #pragma omp parallel for
-        for (size_t i = 0; i < rows_; ++i) {
-            for (size_t k = 0; k < cols_; ++k) {
-                __m256 a = _mm256_set1_ps((*this)(i, k));
-                
-                size_t j = 0;
-                for (; j + 8 <= other.cols_; j += 8) {
-                    __m256 b = _mm256_load_ps(&other(k, j));
-                    __m256 c = _mm256_load_ps(&result(i, j));
-                    c = _mm256_fmadd_ps(a, b, c);
-                    _mm256_store_ps(&result(i, j), c);
-                }
-                
-                // Remainder
-                for (; j < other.cols_; ++j) {
-                    result(i, j) += (*this)(i, k) * other(k, j);
-                }
-            }
-        }
-    }
+    size_t rows, cols;
+    std::vector<T> data;
 };
 
-
+// Vector alias
 template <typename T>
-using Vector = Matrix<T, 1>;
+using Vector = Matrix<T>;
