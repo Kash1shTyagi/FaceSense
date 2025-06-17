@@ -10,6 +10,8 @@
 #include <immintrin.h>
 #include <random>
 #include <functional>
+#include <sstream>
+#include <iomanip>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -23,6 +25,9 @@ public:
     Matrix(size_t rows, size_t cols) : rows(rows), cols(cols), data(rows * cols) {}
     
     Matrix(size_t rows, size_t cols, const T& init) : rows(rows), cols(cols), data(rows * cols, init) {}
+    
+    Matrix(size_t rows, size_t cols, T* external_data) 
+        : rows(rows), cols(cols), data(external_data, external_data + rows * cols) {}
     
     // Accessors
     T& operator()(size_t i, size_t j) { return data[i * cols + j]; }
@@ -38,18 +43,22 @@ public:
         if (row.size() != cols) {
             throw std::invalid_argument("Row size mismatch");
         }
-        for (size_t j = 0; j < cols; j++) {
-            (*this)(i, j) = row[j];
-        }
+        std::copy(row.begin(), row.end(), data.begin() + i * cols);
     }
     
-    std::vector<T> row(size_t i) const {
+    std::vector<T> get_row(size_t i) const {
         if (i >= rows) throw std::out_of_range("Row index out of range");
-        std::vector<T> result(cols);
+        return std::vector<T>(data.begin() + i * cols, 
+                             data.begin() + (i + 1) * cols);
+    }
+    
+    Vector<T> row_vector(size_t i) const {
+        if (i >= rows) throw std::out_of_range("Row index out of range");
+        Vector<T> vec(1, cols);
         for (size_t j = 0; j < cols; j++) {
-            result[j] = (*this)(i, j);
+            vec(0, j) = (*this)(i, j);
         }
-        return result;
+        return vec;
     }
     
     // Matrix operations
@@ -86,7 +95,10 @@ public:
     
     Matrix operator*(T scalar) const {
         Matrix result(rows, cols);
-        for (size_t i = 0; i < rows * cols; i++) {
+        #ifdef _OPENMP
+        #pragma omp parallel for
+        #endif
+        for (size_t i = 0; i < data.size(); i++) {
             result.data[i] = data[i] * scalar;
         }
         return result;
@@ -96,13 +108,31 @@ public:
         return mat * scalar;
     }
     
+    Matrix operator+(const Matrix& other) const {
+        if (rows != other.rows || cols != other.cols) {
+            throw std::invalid_argument("Matrix dimensions mismatch");
+        }
+        
+        Matrix result(rows, cols);
+        #ifdef _OPENMP
+        #pragma omp parallel for
+        #endif
+        for (size_t i = 0; i < data.size(); i++) {
+            result.data[i] = data[i] + other.data[i];
+        }
+        return result;
+    }
+    
     Matrix operator-(const Matrix& other) const {
         if (rows != other.rows || cols != other.cols) {
             throw std::invalid_argument("Matrix dimensions mismatch");
         }
         
         Matrix result(rows, cols);
-        for (size_t i = 0; i < rows * cols; i++) {
+        #ifdef _OPENMP
+        #pragma omp parallel for
+        #endif
+        for (size_t i = 0; i < data.size(); i++) {
             result.data[i] = data[i] - other.data[i];
         }
         return result;
@@ -125,20 +155,29 @@ public:
     void save(const std::string& filename) const {
         std::ofstream file(filename, std::ios::binary);
         if (!file) throw std::runtime_error("Cannot open file: " + filename);
-        
-        file.write(reinterpret_cast<const char*>(&rows), sizeof(rows));
-        file.write(reinterpret_cast<const char*>(&cols), sizeof(cols));
-        file.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(T));
+        save(file);
     }
     
-    void load(const std::string& filename) {
+    void save(std::ostream& os) const {
+        os.write(reinterpret_cast<const char*>(&rows), sizeof(rows));
+        os.write(reinterpret_cast<const char*>(&cols), sizeof(cols));
+        os.write(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(T));
+    }
+    
+    static Matrix load(const std::string& filename) {
         std::ifstream file(filename, std::ios::binary);
         if (!file) throw std::runtime_error("Cannot open file: " + filename);
+        return load(file);
+    }
+    
+    static Matrix load(std::istream& is) {
+        size_t rows, cols;
+        is.read(reinterpret_cast<char*>(&rows), sizeof(rows));
+        is.read(reinterpret_cast<char*>(&cols), sizeof(cols));
         
-        file.read(reinterpret_cast<char*>(&rows), sizeof(rows));
-        file.read(reinterpret_cast<char*>(&cols), sizeof(cols));
-        data.resize(rows * cols);
-        file.read(reinterpret_cast<char*>(data.data()), data.size() * sizeof(T));
+        Matrix result(rows, cols);
+        is.read(reinterpret_cast<char*>(result.data.data()), result.size() * sizeof(T));
+        return result;
     }
     
     // Data access
