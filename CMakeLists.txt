@@ -1,74 +1,129 @@
 cmake_minimum_required(VERSION 3.15)
-project(FaceEmotionRecognition LANGUAGES CXX)
+project(face_emotion_cpp
+    VERSION 1.0
+    DESCRIPTION "Real‐Time Face Feature Extraction & Emotion Classification in C++"
+    LANGUAGES CXX
+)
 
-# CMake settings
+# ──────────────────────────────────────────────────────────────────────────────
+# 1) GLOBAL SETTINGS
+# ──────────────────────────────────────────────────────────────────────────────
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+option(BUILD_TESTS "Enable building of unit tests" ON)
 
-# Configuration options
-option(BUILD_TESTS "Build test executables" ON)
-option(USE_OPENMP "Enable OpenMP parallelization" ON)
-option(USE_AVX "Enable AVX optimizations" ON)
-option(DEPLOY_MODE "Optimize for deployment" OFF)
+# Make install prefix relocatable-friendly
+if(NOT CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+  # user-provided, leave as is
+else()
+  set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/install" CACHE PATH "" FORCE)
+endif()
 
-# OpenCV dependency
+# ──────────────────────────────────────────────────────────────────────────────
+# 2) DEPENDENCIES
+# ──────────────────────────────────────────────────────────────────────────────
 find_package(OpenCV REQUIRED)
 
-# Set deployment flags
-if(DEPLOY_MODE)
-    add_compile_definitions(DEPLOY_MODE)
-    set(CMAKE_BUILD_TYPE Release)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -static-libstdc++ -static-libgcc")
-endif()
-
-# Optimizations
-if(USE_OPENMP)
-    find_package(OpenMP REQUIRED)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
-endif()
-
-if(USE_AVX)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mavx -mfma")
-endif()
-
-# Main executable
-add_executable(emotion_recognition src/main.cpp)
-target_include_directories(emotion_recognition PUBLIC include)
-target_link_libraries(emotion_recognition PRIVATE ${OpenCV_LIBS})
-
-# Testing targets
 if(BUILD_TESTS)
-    enable_testing()
-    
-    # Matrix tests
-    add_executable(test_matrix tests/test_matrix.cpp)
-    target_include_directories(test_matrix PUBLIC include)
-    add_test(NAME MatrixTests COMMAND test_matrix)
-    
-    # PCA tests
-    add_executable(test_pca tests/test_pca.cpp)
-    target_include_directories(test_pca PUBLIC include)
-    target_link_libraries(test_pca PRIVATE ${OpenCV_LIBS})
-    add_test(NAME PCATests COMMAND test_pca)
-    
-    # GMM tests
-    add_executable(test_gmm tests/test_gmm.cpp)
-    target_include_directories(test_gmm PUBLIC include)
-    add_test(NAME GMMTests COMMAND test_gmm)
-    
-    # FFNN tests
-    add_executable(test_ffnn tests/test_ffnn.cpp)
-    target_include_directories(test_ffnn PUBLIC include)
-    add_test(NAME FFNNTests COMMAND test_ffnn)
-    
-    # Integration test
-    add_executable(test_integration tests/test_integration.cpp)
-    target_include_directories(test_integration PUBLIC include)
-    target_link_libraries(test_integration PRIVATE ${OpenCV_LIBS})
-    add_test(NAME IntegrationTest COMMAND test_integration)
+  include(FetchContent)
+  FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG        release-1.12.1
+  )
+  FetchContent_MakeAvailable(googletest)
 endif()
 
-# Installation for deployment
-install(TARGETS emotion_recognition DESTINATION bin)
-install(DIRECTORY data/ DESTINATION share/face_emotion_cpp/data)
+# ──────────────────────────────────────────────────────────────────────────────
+# 3) CORE LIBRARY
+# ──────────────────────────────────────────────────────────────────────────────
+add_library(face_core
+    src/Matrix.cpp
+    src/PCA.cpp
+    src/GMM.cpp
+    src/FFNN.cpp
+    src/Utils.cpp
+)
+
+target_include_directories(face_core
+    PUBLIC
+      $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+      $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(face_core
+    PUBLIC
+      ${OpenCV_LIBS}
+)
+target_compile_features(face_core PUBLIC cxx_std_17)
+set_target_properties(face_core PROPERTIES EXPORT_NAME core)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 4) APPLICATION
+# ──────────────────────────────────────────────────────────────────────────────
+add_executable(face_emotion_app
+    src/main.cpp
+)
+target_link_libraries(face_emotion_app
+    PRIVATE
+      face_core
+)
+set_target_properties(face_emotion_app PROPERTIES OUTPUT_NAME face_emotion)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 5) INSTALLATION & EXPORT
+# ──────────────────────────────────────────────────────────────────────────────
+install(TARGETS face_core face_emotion_app
+    EXPORT face_emotion_cppTargets
+    RUNTIME DESTINATION bin
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+)
+install(DIRECTORY include/ DESTINATION include)
+
+# Generate a Config file for find_package()
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file(
+  "${CMAKE_CURRENT_BINARY_DIR}/face_emotion_cppConfigVersion.cmake"
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY AnyNewerVersion
+)
+configure_package_config_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Config.cmake.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/face_emotion_cppConfig.cmake"
+  INSTALL_DESTINATION lib/cmake/face_emotion_cpp
+)
+install(EXPORT face_emotion_cppTargets
+    FILE face_emotion_cppTargets.cmake
+    NAMESPACE face_emotion_cpp::
+    DESTINATION lib/cmake/face_emotion_cpp
+)
+install(
+  FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/face_emotion_cppConfig.cmake"
+    "${CMAKE_CURRENT_BINARY_DIR}/face_emotion_cppConfigVersion.cmake"
+  DESTINATION lib/cmake/face_emotion_cpp
+)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 6) TESTS
+# ──────────────────────────────────────────────────────────────────────────────
+if(BUILD_TESTS)
+  enable_testing()
+
+  add_executable(test_matrix tests/test_matrix.cpp)
+  target_link_libraries(test_matrix PRIVATE face_core gtest_main)
+  add_test(NAME matrix_tests COMMAND test_matrix)
+
+  add_executable(test_pca tests/test_pca.cpp)
+  target_link_libraries(test_pca PRIVATE face_core gtest_main)
+  add_test(NAME pca_tests COMMAND test_pca)
+
+  add_executable(test_gmm tests/test_gmm.cpp)
+  target_link_libraries(test_gmm PRIVATE face_core gtest_main)
+  add_test(NAME gmm_tests COMMAND test_gmm)
+
+  add_executable(test_ffnn tests/test_ffnn.cpp)
+  target_link_libraries(test_ffnn PRIVATE face_core gtest_main)
+  add_test(NAME ffnn_tests COMMAND test_ffnn)
+endif()

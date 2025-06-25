@@ -1,262 +1,252 @@
 #pragma once
-#include "Matrix.hpp"
-#include <cmath>
 #include <vector>
-#include <stdexcept>
-#include <iostream>
-#include <limits>
 #include <random>
-#include <algorithm>
-#include <fstream>
+#include <cmath>
+#include <stdexcept>
+#include <limits>
 
-class GMM {
-public:
-    struct Component {
-        Vector<float> mean;
-        Vector<float> variances;  // Diagonal covariance
-        float weight;
-        
-        float pdf(const Vector<float>& x) const {
-            size_t dim = mean.num_cols();
-            float exponent = 0.0f;
-            
-            for (size_t i = 0; i < dim; ++i) {
-                float diff = x(0, i) - mean(0, i);
-                exponent += diff * diff / variances(0, i);
+/**
+ * @brief Multivariate Gaussian and GMM (EM) in PCA feature space.
+ * Template on T (float/double).
+ */
+namespace GMM {
+
+    /**
+     * @brief Simple struct for a single Gaussian component.
+     */
+    template<typename T>
+    struct GaussianComponent {
+        std::vector<T> mean;        // length k
+        std::vector<std::vector<T>> cov;      // k x k covariance matrix
+        std::vector<std::vector<T>> cov_inv;  // precomputed inverse
+        T cov_det;                  // precomputed determinant
+        T weight;                   // mixing weight π_m
+
+        /**
+         * @brief Initialize component with given dimension k.
+         */
+        GaussianComponent(size_t k = 0)
+            : mean(k, T{}),
+              cov(k, std::vector<T>(k, T{})),
+              cov_inv(k, std::vector<T>(k, T{})),
+              cov_det(T{1}),
+              weight(T{1}) {}
+
+        /**
+         * @brief Compute PDF N(x; mean, cov). Assumes cov_inv and cov_det are set.
+         */
+        T pdf(const std::vector<T>& x) const {
+            size_t k = mean.size();
+            if (x.size() != k)
+                throw std::runtime_error("Dimension mismatch in GaussianComponent::pdf");
+            // Compute (x - mean)
+            std::vector<T> diff(k);
+            for (size_t i = 0; i < k; ++i)
+                diff[i] = x[i] - mean[i];
+            // Compute Mahalanobis: diff^T * cov_inv * diff
+            std::vector<T> tmp(k, T{});
+            for (size_t i = 0; i < k; ++i) {
+                T acc = T{};
+                for (size_t j = 0; j < k; ++j) {
+                    acc += cov_inv[i][j] * diff[j];
+                }
+                tmp[i] = acc;
             }
-            
-            float normalization = 1.0f;
-            for (size_t i = 0; i < dim; ++i) {
-                normalization *= 2 * M_PI * variances(0, i);
-            }
-            normalization = std::sqrt(normalization);
-            
-            return std::exp(-0.5f * exponent) / normalization;
-        }
-        
-        void save(std::ostream& os) const {
-            mean.save(os);
-            variances.save(os);
-            os.write(reinterpret_cast<const char*>(&weight), sizeof(weight));
-        }
-        
-        void load(std::istream& is) {
-            mean = Vector<float>::load(is);
-            variances = Vector<float>::load(is);
-            is.read(reinterpret_cast<char*>(&weight), sizeof(weight));
+            T mah = T{};
+            for (size_t i = 0; i < k; ++i)
+                mah += diff[i] * tmp[i];
+            T norm_const = std::pow(static_cast<T>(2 * M_PI), -static_cast<T>(k) / 2) * std::pow(cov_det, -static_cast<T>(0.5));
+            return norm_const * std::exp(-static_cast<T>(0.5) * mah);
         }
     };
-    
-    GMM() = default;
-    
-    void train(const Matrix<float>& data, size_t components, 
-               size_t max_iter = 100, float tol = 1e-6f) {
-        size_t n = data.num_rows();
-        size_t dim = data.num_cols();
-        
-        initialize_components(data, components);
-        Matrix<float> responsibilities(n, components, 0.0f);
-        float prev_log_likelihood = -std::numeric_limits<float>::max();
-        
-        for (size_t iter = 0; iter < max_iter; ++iter) {
-            // E-step: Compute responsibilities
-            #ifdef _OPENMP
-            #pragma omp parallel for
-            #endif
-            for (size_t i = 0; i < n; ++i) {
-                Vector<float> sample = data.row_vector(i);
-                float sum_prob = 0.0f;
-                
-                for (size_t k = 0; k < components; ++k) {
-                    responsibilities(i, k) = components_[k].weight * 
-                                            components_[k].pdf(sample);
-                    sum_prob += responsibilities(i, k);
+
+    /**
+     * @brief Compute inverse and determinant of a matrix.
+     * You can implement using Gaussian elimination or Cholesky if covariances are SPD.
+     * For simplicity, one may assume diagonal covariance (store only diagonal), then inverse and det are trivial.
+     *
+     * Here declare a utility; implement in GMM.cpp:
+     * - For full cov: use naive inversion (e.g., Gaussian elimination) or better Cholesky.
+     * - For diagonal: extract diagonal elements.
+     */
+    template<typename T>
+    void invertMatrix(const std::vector<std::vector<T>>& mat,
+                      std::vector<std::vector<T>>& mat_inv,
+                      T& det) {
+        // Implement full inversion or throw if unimplemented.
+        // For now, assume diagonal case: check off-diagonals are zero.
+        size_t k = mat.size();
+        mat_inv.assign(k, std::vector<T>(k, T{}));
+        det = T{1};
+        for (size_t i = 0; i < k; ++i) {
+            bool diagonal = true;
+            for (size_t j = 0; j < k; ++j) {
+                if (i != j && std::abs(mat[i][j]) > std::numeric_limits<T>::epsilon()) {
+                    diagonal = false;
+                    break;
                 }
-                
-                if (sum_prob > 0) {
-                    for (size_t k = 0; k < components; ++k) {
-                        responsibilities(i, k) /= sum_prob;
+            }
+            if (!diagonal) {
+                throw std::runtime_error("Full covariance inversion not implemented; consider diagonal covariance");
+            }
+            T val = mat[i][i];
+            if (val <= T{}) throw std::runtime_error("Non-positive diagonal in covariance");
+            mat_inv[i][i] = T{1} / val;
+            det *= val;
+        }
+    }
+
+    /**
+     * @brief GMM model: holds M components and performs EM training (offline) and inference.
+     */
+    template<typename T>
+    class GMMModel {
+    public:
+        GMMModel(size_t num_components = 0, size_t dim = 0)
+            : M(num_components), k(dim) {
+            components.reserve(M);
+            for (size_t m = 0; m < M; ++m)
+                components.emplace_back(dim);
+        }
+
+        /**
+         * @brief Initialize parameters: e.g., random means from data, equal weights, identity or diagonal cov.
+         * Implement as needed.
+         */
+        void initialize(const std::vector<std::vector<T>>& data) {
+            // e.g., random select means, weights = 1/M, cov = identity or sample variance.
+            // This is user-implemented in GMM.cpp.
+        }
+
+        /**
+         * @brief Fit GMM via EM on provided data.
+         * @param data: N samples of length k.
+         * @param max_iters: max EM iterations.
+         * @param tol: tolerance on log-likelihood improvement.
+         */
+        void fit(const std::vector<std::vector<T>>& data, int max_iters = 100, T tol = static_cast<T>(1e-4)) {
+            size_t N = data.size();
+            if (N == 0) throw std::runtime_error("No data for GMM fit");
+            // Allocate responsibility matrix gamma: N x M
+            std::vector<std::vector<T>> gamma(N, std::vector<T>(M, T{}));
+            T prev_ll = -std::numeric_limits<T>::infinity();
+
+            // EM loop (outline)
+            for (int iter = 0; iter < max_iters; ++iter) {
+                // E-step: compute responsibilities
+                for (size_t i = 0; i < N; ++i) {
+                    T sum_resp = T{};
+                    for (size_t m = 0; m < M; ++m) {
+                        T p = components[m].weight * components[m].pdf(data[i]);
+                        gamma[i][m] = p;
+                        sum_resp += p;
+                    }
+                    if (sum_resp <= T{}) {
+                        // underflow or zero; distribute uniformly
+                        T uniform = T{1} / static_cast<T>(M);
+                        for (size_t m = 0; m < M; ++m)
+                            gamma[i][m] = uniform;
+                    } else {
+                        for (size_t m = 0; m < M; ++m)
+                            gamma[i][m] /= sum_resp;
                     }
                 }
-            }
-            
-            // M-step: Update parameters
-            update_parameters(data, responsibilities);
-            
-            // Check convergence
-            float log_likelihood = compute_log_likelihood(data);
-            if (std::abs(log_likelihood - prev_log_likelihood) < tol) break;
-            prev_log_likelihood = log_likelihood;
-        }
-    }
-    
-    std::vector<float> predict(const Vector<float>& x) const {
-        std::vector<float> probs(components_.size());
-        float sum = 0.0f;
-        
-        for (size_t k = 0; k < components_.size(); ++k) {
-            probs[k] = components_[k].weight * components_[k].pdf(x);
-            sum += probs[k];
-        }
-        
-        if (sum > 0) {
-            for (float& p : probs) p /= sum;
-        }
-        
-        return probs;
-    }
-    
-    // Serialization
-    void save(const std::string& filename) const {
-        std::ofstream file(filename, std::ios::binary);
-        if (!file) throw std::runtime_error("Cannot open file: " + filename);
-        
-        size_t num_components = components_.size();
-        file.write(reinterpret_cast<const char*>(&num_components), sizeof(num_components));
-        
-        for (const auto& comp : components_) {
-            comp.save(file);
-        }
-    }
-    
-    void load(const std::string& filename) {
-        std::ifstream file(filename, std::ios::binary);
-        if (!file) throw std::runtime_error("Cannot open file: " + filename);
-        
-        size_t num_components;
-        file.read(reinterpret_cast<char*>(&num_components), sizeof(num_components));
-        components_.resize(num_components);
-        
-        for (auto& comp : components_) {
-            comp.load(file);
-        }
-    }
-    
-private:
-    std::vector<Component> components_;
-    
-    void initialize_components(const Matrix<float>& data, size_t components) {
-        size_t n = data.num_rows();
-        size_t dim = data.num_cols();
-        components_.resize(components);
-        
-        // K-means++ initialization
-        std::random_device rd;
-        std::mt19937 gen(rd());
-        std::uniform_int_distribution<size_t> dist(0, n - 1);
-        
-        // First centroid
-        size_t first_idx = dist(gen);
-        components_[0].mean = data.row_vector(first_idx);
-        
-        // Subsequent centroids
-        for (size_t k = 1; k < components; ++k) {
-            Vector<float> distances(1, n, 0.0f);
-            #ifdef _OPENMP
-            #pragma omp parallel for
-            #endif
-            for (size_t i = 0; i < n; ++i) {
-                float min_dist = std::numeric_limits<float>::max();
-                Vector<float> sample = data.row_vector(i);
-                
-                for (size_t j = 0; j < k; ++j) {
-                    float dist = (sample - components_[j].mean).norm();
-                    if (dist < min_dist) min_dist = dist;
+                // M-step: update parameters
+                for (size_t m = 0; m < M; ++m) {
+                    T N_m = T{};
+                    // Sum responsibilities
+                    for (size_t i = 0; i < N; ++i)
+                        N_m += gamma[i][m];
+                    if (N_m <= T{}) N_m = std::numeric_limits<T>::epsilon();
+                    // Update weight
+                    components[m].weight = N_m / static_cast<T>(N);
+                    // Update mean
+                    std::vector<T> new_mean(k, T{});
+                    for (size_t i = 0; i < N; ++i) {
+                        for (size_t d = 0; d < k; ++d)
+                            new_mean[d] += gamma[i][m] * data[i][d];
+                    }
+                    for (size_t d = 0; d < k; ++d)
+                        new_mean[d] /= N_m;
+                    components[m].mean = new_mean;
+                    // Update covariance
+                    std::vector<std::vector<T>> new_cov(k, std::vector<T>(k, T{}));
+                    for (size_t i = 0; i < N; ++i) {
+                        // diff = x - mean
+                        std::vector<T> diff(k);
+                        for (size_t d = 0; d < k; ++d)
+                            diff[d] = data[i][d] - components[m].mean[d];
+                        // outer product diff * diff^T
+                        for (size_t u = 0; u < k; ++u) {
+                            for (size_t v = 0; v < k; ++v) {
+                                new_cov[u][v] += gamma[i][m] * diff[u] * diff[v];
+                            }
+                        }
+                    }
+                    for (size_t u = 0; u < k; ++u)
+                        for (size_t v = 0; v < k; ++v)
+                            new_cov[u][v] /= N_m;
+                    components[m].cov = new_cov;
+                    // Compute inverse and determinant
+                    invertMatrix(components[m].cov, components[m].cov_inv, components[m].cov_det);
                 }
-                
-                distances(0, i) = min_dist * min_dist;
-            }
-            
-            // Select proportional to distance squared
-            std::discrete_distribution<size_t> idx_dist(
-                distances.get_data().begin(), distances.get_data().end());
-            size_t new_idx = idx_dist(gen);
-            components_[k].mean = data.row_vector(new_idx);
-        }
-        
-        // Initialize variances and weights
-        for (auto& comp : components_) {
-            comp.variances = Vector<float>(1, dim, 1.0f);  // Initial variance
-            comp.weight = 1.0f / components;
-        }
-    }
-    
-    void update_parameters(const Matrix<float>& data, 
-                          const Matrix<float>& responsibilities) {
-        size_t n = data.num_rows();
-        size_t dim = data.num_cols();
-        size_t components = components_.size();
-        
-        // Update weights and means
-        for (size_t k = 0; k < components; ++k) {
-            float sum_resp = 0.0f;
-            Vector<float> new_mean(1, dim, 0.0f);
-            
-            #ifdef _OPENMP
-            #pragma omp parallel for reduction(+:sum_resp)
-            #endif
-            for (size_t i = 0; i < n; ++i) {
-                float resp = responsibilities(i, k);
-                sum_resp += resp;
-                new_mean = new_mean + data.row_vector(i) * resp;
-            }
-            
-            components_[k].weight = sum_resp / n;
-            if (sum_resp > 0) {
-                components_[k].mean = new_mean * (1.0f / sum_resp);
-            }
-        }
-        
-        // Update variances (diagonal covariance)
-        for (size_t k = 0; k < components; ++k) {
-            Vector<float> new_var(1, dim, 0.0f);
-            float sum_resp = 0.0f;
-            
-            #ifdef _OPENMP
-            #pragma omp parallel for reduction(+:sum_resp)
-            #endif
-            for (size_t i = 0; i < n; ++i) {
-                float resp = responsibilities(i, k);
-                Vector<float> diff = data.row_vector(i) - components_[k].mean;
-                
-                for (size_t j = 0; j < dim; ++j) {
-                    new_var(0, j) += resp * diff(0, j) * diff(0, j);
+                // Compute log-likelihood
+                T ll = T{};
+                for (size_t i = 0; i < N; ++i) {
+                    T sum_p = T{};
+                    for (size_t m = 0; m < M; ++m)
+                        sum_p += components[m].weight * components[m].pdf(data[i]);
+                    if (sum_p > T{})
+                        ll += std::log(sum_p);
+                    else
+                        ll += std::log(std::numeric_limits<T>::min());
                 }
-                sum_resp += resp;
-            }
-            
-            if (sum_resp > 0) {
-                components_[k].variances = new_var * (1.0f / sum_resp);
-                
-                // Add regularization to avoid zero variance
-                for (size_t j = 0; j < dim; ++j) {
-                    components_[k].variances(0, j) = 
-                        std::max(components_[k].variances(0, j), 1e-6f);
-                }
+                if (std::abs(ll - prev_ll) < tol)
+                    break;
+                prev_ll = ll;
             }
         }
-    }
-    
-    float compute_log_likelihood(const Matrix<float>& data) const {
-        float log_likelihood = 0.0f;
-        size_t n = data.num_rows();
-        
-        #ifdef _OPENMP
-        #pragma omp parallel for reduction(+:log_likelihood)
-        #endif
-        for (size_t i = 0; i < n; ++i) {
-            float sample_prob = 0.0f;
-            Vector<float> sample = data.row_vector(i);
-            
-            for (const auto& comp : components_) {
-                sample_prob += comp.weight * comp.pdf(sample);
+
+        /**
+         * @brief Given a new sample, compute posterior probabilities over components.
+         * @param x: sample vector length k.
+         * @return vector<T> of size M with normalized posterior probabilities.
+         */
+        std::vector<T> infer(const std::vector<T>& x) const {
+            std::vector<T> post(M, T{});
+            T sum_p = T{};
+            for (size_t m = 0; m < M; ++m) {
+                T p = components[m].weight * components[m].pdf(x);
+                post[m] = p;
+                sum_p += p;
             }
-            
-            if (sample_prob > 0) {
-                log_likelihood += std::log(sample_prob);
+            if (sum_p <= T{}) {
+                T uniform = T{1} / static_cast<T>(M);
+                for (size_t m = 0; m < M; ++m)
+                    post[m] = uniform;
+            } else {
+                for (size_t m = 0; m < M; ++m)
+                    post[m] /= sum_p;
             }
+            return post;
         }
-        
-        return log_likelihood;
-    }
-};
+
+        const std::vector<GaussianComponent<T>>& getComponents() const {
+            return components;
+        }
+
+        /**
+         * @brief Serialize/deserialize parameters to/from binary files.
+         * Implement in Utils.cpp: write number of components M, dimension k, then for each:
+         * weight, mean vector, cov matrix.
+         */
+        void saveToFile(const std::string& filename) const;
+        void loadFromFile(const std::string& filename);
+
+    private:
+        size_t M;  // number of components
+        size_t k;  // dimension
+        std::vector<GaussianComponent<T>> components;
+    };
+
+} // namespace GMM
