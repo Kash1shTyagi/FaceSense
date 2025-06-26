@@ -60,7 +60,8 @@ namespace GMM
             T mah = T{};
             for (size_t i = 0; i < k; ++i)
                 mah += diff[i] * tmp[i];
-            T norm_const = std::pow(static_cast<T>(2 * M_PI), -static_cast<T>(k) / 2) * std::pow(cov_det, -static_cast<T>(0.5));
+            T pi = std::acos(-T(1));
+            T norm_const = std::pow(static_cast<T>(2) * pi, -static_cast<T>(k) / 2) * std::pow(cov_det, static_cast<T>(-0.5));
             return norm_const * std::exp(-static_cast<T>(0.5) * mah);
         }
     };
