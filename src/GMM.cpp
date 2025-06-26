@@ -1,49 +1,34 @@
+// src/GMM.cpp
+
 #include "GMM.hpp"
+
 #include <fstream>
+#include <sstream>
+#include <stdexcept>
 
 namespace GMM {
 
 //
-// Simple “diagonal-only” invertMatrix implementation
-//
-template<typename T>
-void invertMatrix(const std::vector<std::vector<T>>& mat,
-                  std::vector<std::vector<T>>& mat_inv,
-                  T& det) {
-    size_t k = mat.size();
-    mat_inv.assign(k, std::vector<T>(k, T{}));
-    det = T{1};
-    for (size_t i = 0; i < k; ++i) {
-        T d = mat[i][i];
-        if (d <= T{}) throw std::runtime_error("Non-positive variance in diagonal GMM");
-        mat_inv[i][i] = T{1} / d;
-        det *= d;
-    }
-}
-
-// Explicitly instantiate
-template void invertMatrix<double>(
-    const std::vector<std::vector<double>>&,
-    std::vector<std::vector<double>>&,
-    double&
-);
-
-//
-// GMMModel methods: save/load parameters (binary).
+// GMMModel<T> save/load
 //
 template<typename T>
 void GMMModel<T>::saveToFile(const std::string& filename) const {
     std::ofstream out(filename, std::ios::binary);
     if (!out) throw std::runtime_error("Failed to open GMM save file");
-    // Write M, k
-    out.write(reinterpret_cast<const char*>(&M), sizeof(M));
-    out.write(reinterpret_cast<const char*>(&k), sizeof(k));
+
+    // Write component count M and dimension k as 32-bit ints
+    uint32_t M32 = static_cast<uint32_t>(M);
+    uint32_t k32 = static_cast<uint32_t>(k);
+    out.write(reinterpret_cast<const char*>(&M32), sizeof(M32));
+    out.write(reinterpret_cast<const char*>(&k32), sizeof(k32));
+
     for (const auto& comp : components) {
         // weight
         out.write(reinterpret_cast<const char*>(&comp.weight), sizeof(comp.weight));
-        // mean
-        out.write(reinterpret_cast<const char*>(comp.mean.data()), comp.mean.size() * sizeof(T));
-        // cov diagonal only
+        // mean vector
+        out.write(reinterpret_cast<const char*>(comp.mean.data()),
+                  comp.mean.size() * sizeof(T));
+        // covariance diagonal only
         for (size_t i = 0; i < k; ++i) {
             T var = comp.cov[i][i];
             out.write(reinterpret_cast<const char*>(&var), sizeof(T));
@@ -55,28 +40,38 @@ template<typename T>
 void GMMModel<T>::loadFromFile(const std::string& filename) {
     std::ifstream in(filename, std::ios::binary);
     if (!in) throw std::runtime_error("Failed to open GMM load file");
-    size_t m_read, k_read;
-    in.read(reinterpret_cast<char*>(&m_read), sizeof(m_read));
-    in.read(reinterpret_cast<char*>(&k_read), sizeof(k_read));
-    if (m_read != M || k_read != k)
-        throw std::runtime_error("GMM parameter file dimension mismatch");
+
+    // Read M and k as 32-bit ints
+    uint32_t M32 = 0, k32 = 0;
+    in.read(reinterpret_cast<char*>(&M32), sizeof(M32));
+    in.read(reinterpret_cast<char*>(&k32), sizeof(k32));
+
+    if (M32 != static_cast<uint32_t>(M) || k32 != static_cast<uint32_t>(k)) {
+        std::ostringstream oss;
+        oss << "GMM parameter file mismatch: file has M=" << M32
+            << ", k=" << k32
+            << " but model expects M=" << M << ", k=" << k;
+        throw std::runtime_error(oss.str());
+    }
+
     for (auto& comp : components) {
         // weight
         in.read(reinterpret_cast<char*>(&comp.weight), sizeof(comp.weight));
-        // mean
-        in.read(reinterpret_cast<char*>(comp.mean.data()), comp.mean.size() * sizeof(T));
-        // cov diag only
+        // mean vector
+        in.read(reinterpret_cast<char*>(comp.mean.data()),
+                comp.mean.size() * sizeof(T));
+        // covariance diagonal
         for (size_t i = 0; i < k; ++i) {
             T var;
             in.read(reinterpret_cast<char*>(&var), sizeof(T));
             comp.cov[i][i] = var;
         }
-        // rebuild inv & det
+        // rebuild inverse and determinant via inline invertMatrix<T>
         invertMatrix(comp.cov, comp.cov_inv, comp.cov_det);
     }
 }
 
-// Explicit instantiation
+// Explicit instantiation of GMMModel for double
 template class GMMModel<double>;
 
 } // namespace GMM

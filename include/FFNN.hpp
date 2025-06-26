@@ -1,7 +1,8 @@
 #pragma once
 #include <vector>
 #include <string>
-
+#include <cmath>        
+#include <stdexcept>   
 /**
  * @brief Small Feedforward Neural Network inference in C++.
  * Architecture: input size k → hidden size H (e.g., 32) with ReLU → output size C (num classes) with Softmax.

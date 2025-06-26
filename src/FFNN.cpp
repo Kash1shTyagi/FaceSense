@@ -1,5 +1,5 @@
 #include "FFNN.hpp"
-#include "Utils.cpp"
+#include "Utils.hpp"
 #include <stdexcept>
 
 namespace FFNN {

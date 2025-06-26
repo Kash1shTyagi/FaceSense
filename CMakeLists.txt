@@ -48,12 +48,18 @@ add_library(face_core
 
 target_include_directories(face_core
     PUBLIC
+      # Project headers
       $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
       $<INSTALL_INTERFACE:include>
+      # OpenCV headers
+      ${OpenCV_INCLUDE_DIRS}
 )
+
 target_link_libraries(face_core
     PUBLIC
-      ${OpenCV_LIBS}
+      ${OpenCV_LIBS}        # legacy OpenCV variables
+      # or for modern CMake if OpenCV provides imported targets:
+      # OpenCV::opencv_core OpenCV::opencv_imgproc OpenCV::opencv_objdetect …
 )
 target_compile_features(face_core PUBLIC cxx_std_17)
 set_target_properties(face_core PROPERTIES EXPORT_NAME core)
