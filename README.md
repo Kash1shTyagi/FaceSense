@@ -28,7 +28,7 @@ Real-Time Facial Feature Extraction & Emotion Classification using C++ and OpenC
 ---
 
 ## 🗂️ Project Structure
-
+```bash
 face_emotion_cpp/
 ├── include/ # Public headers
 ├── src/ # Core implementations
@@ -45,95 +45,8 @@ face_emotion_cpp/
 ├── Dockerfile # Docker build instructions
 └── generate_dummy_data.py # Generates mock model weights for testing
 
-
-
----
-
-## ⚙️ Local Setup
-
-### Prerequisites
-
-- Ubuntu 22.04+ (or WSL)
-- CMake >= 3.15
-- g++ with C++17 support
-- Python 3.x
-- OpenCV (`libopencv-dev`)
-
-### Build Instructions
-
-```bash
-# Clone the repo
-git clone https://github.com/<your-username>/face_emotion_cpp.git
-cd face_emotion_cpp
-
-# Install dependencies
-sudo apt update
-sudo apt install -y build-essential cmake libopencv-dev python3 python3-numpy
-
-# Generate dummy model files
-python3 generate_dummy_data.py
-
-# Configure & Build
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
-cmake --build build -j$(nproc)
-
-
-Here's the **complete Markdown code** that you can paste directly into your `README.md` file:
-
-```markdown
-# 🎭 Face Emotion Recognition in C++
-
-Real-Time Facial Feature Extraction & Emotion Classification using C++ and OpenCV. This project implements PCA-based facial feature extraction and emotion prediction using classical ML methods (GMM, FFNN). It is optimized for real-time webcam inference and includes test suites for PCA, GMM, and FFNN.
-
----
-
-## 🚀 Features
-
-- Real-time face detection via Haar Cascade
-- PCA for dimensionality reduction of facial features
-- GMM (Gaussian Mixture Models) for probabilistic modeling
-- Feedforward Neural Network (FFNN) for emotion classification
-- Modular design: clean separation between feature extraction and classification
-- GoogleTest-based unit testing for all core modules
-- Lightweight and portable Docker build
-
----
-
-## 🛠️ Tech Stack
-
-- **Language**: C++17
-- **Computer Vision**: OpenCV (`core`, `imgproc`, `objdetect`, `highgui`)
-- **Build System**: CMake
-- **ML Components**: PCA, GMM, FFNN (custom implemented)
-- **Testing**: GoogleTest
-- **Packaging**: Docker multi-stage build
-
----
-
-## 🗂️ Project Structure
-
 ```
 
-face\_emotion\_cpp/
-├── include/               # Public headers
-├── src/                   # Core implementations
-│   ├── main.cpp           # Entry point
-│   ├── Matrix.cpp         # Matrix math utils
-│   ├── PCA.cpp            # Principal Component Analysis
-│   ├── GMM.cpp            # Gaussian Mixture Model
-│   └── FFNN.cpp           # Simple Feedforward NN
-├── tests/                 # GoogleTest unit tests
-├── data/                  # Model weights, mean\_face.bin, sample.pgm, etc.
-├── cmake/                 # Package config template
-├── third\_party/           # External dependencies (OpenCV, GTest)
-├── CMakeLists.txt         # Build script
-├── Dockerfile             # Docker build instructions
-└── generate\_dummy\_data.py # Generates mock model weights for testing
-
-````
-
----
-
 ## ⚙️ Local Setup
 
 ### Prerequisites
@@ -161,9 +74,8 @@ python3 generate_dummy_data.py
 # Configure & Build
 cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=ON
 cmake --build build -j$(nproc)
-````
+```
 
----
 
 ## 📷 Running the App
 
